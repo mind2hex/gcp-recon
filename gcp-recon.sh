@@ -137,11 +137,107 @@ json_non_empty() {
   ' >/dev/null 2>&1
 }
 
+test_firestore_collection_crud() {
+    local base="$1"
+    local collection="$2"
+    local response status body
+
+    local test_doc_id="audit_$(date +%s)_$RANDOM"
+    local test_doc_path="$base/$collection/$test_doc_id"
+    local create_url="$base/$collection?documentId=$test_doc_id"
+
+    local create_payload update_payload
+
+    create_payload='{
+      "fields": {
+        "security_test": { "booleanValue": true },
+        "operation": { "stringValue": "unauthenticated_create_test" },
+        "created_by": { "stringValue": "firestore_rest_audit_script" }
+      }
+    }'
+
+    update_payload='{
+      "fields": {
+        "security_test": { "booleanValue": true },
+        "operation": { "stringValue": "unauthenticated_update_test" },
+        "updated": { "booleanValue": true }
+      }
+    }'
+
+    echo
+    echo "[*] CRUD checks on discovered collection: $collection"
+    echo "[*] Testing CREATE on $collection/$test_doc_id..."
+
+    response="$(http_post_json "$create_url" "$create_payload")"
+    status="$(echo "$response" | status_of)"
+    body="$(echo "$response" | body_of)"
+
+    if [[ "$status" == "200" ]]; then
+        echo "[X] PUBLIC WRITE in '$collection': unauthenticated document creation allowed"
+    elif [[ "$status" == "403" ]]; then
+        echo "[OK] CREATE blocked in '$collection'"
+    else
+        echo "[?] CREATE in '$collection' returned HTTP $status"
+        echo "$body" | jq . 2>/dev/null || echo "$body"
+    fi
+
+    echo "[*] Testing READ of created document in '$collection'..."
+
+    response="$(http_get "$test_doc_path")"
+    status="$(echo "$response" | status_of)"
+    body="$(echo "$response" | body_of)"
+
+    if [[ "$status" == "200" ]]; then
+        echo "[X] PUBLIC READ in '$collection': test document is readable"
+    elif [[ "$status" == "403" ]]; then
+        echo "[OK] READ blocked in '$collection'"
+    elif [[ "$status" == "404" ]]; then
+        echo "[OK] READ in '$collection' failed because test doc does not exist"
+    else
+        echo "[?] READ in '$collection' returned HTTP $status"
+    fi
+
+    echo "[*] Testing UPDATE/PATCH in '$collection'..."
+
+    response="$(http_patch_json "$test_doc_path?updateMask.fieldPaths=operation&updateMask.fieldPaths=updated" "$update_payload")"
+    status="$(echo "$response" | status_of)"
+    body="$(echo "$response" | body_of)"
+
+    if [[ "$status" == "200" ]]; then
+        echo "[X] PUBLIC WRITE in '$collection': unauthenticated document update allowed"
+    elif [[ "$status" == "403" ]]; then
+        echo "[OK] UPDATE blocked in '$collection'"
+    elif [[ "$status" == "404" ]]; then
+        echo "[OK] UPDATE in '$collection' failed because test doc does not exist"
+    else
+        echo "[?] UPDATE in '$collection' returned HTTP $status"
+        echo "$body" | jq . 2>/dev/null || echo "$body"
+    fi
+
+    echo "[*] Testing DELETE in '$collection'..."
+
+    response="$(http_delete "$test_doc_path")"
+    status="$(echo "$response" | status_of)"
+    body="$(echo "$response" | body_of)"
+
+    if [[ "$status" == "200" ]]; then
+        echo "[X] PUBLIC DELETE in '$collection': unauthenticated document deletion allowed"
+    elif [[ "$status" == "403" ]]; then
+        echo "[OK] DELETE blocked in '$collection'"
+    elif [[ "$status" == "404" ]]; then
+        echo "[OK] DELETE in '$collection' failed because test doc does not exist"
+    else
+        echo "[?] DELETE in '$collection' returned HTTP $status"
+        echo "$body" | jq . 2>/dev/null || echo "$body"
+    fi
+}
+
 check_firestore_api() {
     banner "Testing Firestore REST API"
 
     local base="https://firestore.googleapis.com/v1/projects/$PROJECT_ID/databases/(default)/documents"
     local collections=()
+    local found_collections=()
 
     echo "$base"
 
@@ -164,7 +260,9 @@ check_firestore_api() {
     if [[ -n "$WORDLIST" ]]; then
         echo "[*] Bruteforcing collections from wordlist: $WORDLIST"
 
-        mapfile -t collections < <(sed '/^[[:space:]]*$/d; /^[[:space:]]*#/d' "$WORDLIST")
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            collections+=("$line")
+        done < <(sed '/^[[:space:]]*$/d; /^[[:space:]]*#/d' "$WORDLIST")
 
         if [[ "${#collections[@]}" -eq 0 ]]; then
             echo "[!] Wordlist is empty after filtering comments/blank lines"
@@ -176,10 +274,22 @@ check_firestore_api() {
 
                 if [[ "$status" == "200" ]] && echo "$body" | jq -e '.documents | length > 0' >/dev/null 2>&1; then
                     echo "[X] EXPOSED COLLECTION: $c"
+                    found_collections+=("$c")
                 elif [[ "$status" == "200" ]]; then
                     echo "[!] READABLE EMPTY COLLECTION OR VALID PATH: $c"
+                    found_collections+=("$c")
                 fi
             done
+
+            if [[ "${#found_collections[@]}" -gt 0 ]]; then
+                echo
+                echo "[*] Running CRUD checks on discovered collections..."
+                for c in "${found_collections[@]}"; do
+                    test_firestore_collection_crud "$base" "$c"
+                done
+            else
+                echo "[OK] No readable collections discovered during recon"
+            fi
         fi
     else
         echo "[*] Skipping Firestore collection bruteforce (no --wordlist provided)"
