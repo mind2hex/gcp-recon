@@ -186,6 +186,23 @@ json_non_empty() {
   ' >/dev/null 2>&1
 }
 
+print_collection_table_header() {
+    printf '\n+-%-10s-+-%-30s-+-%-11s-+\n' "----------" "------------------------------" "-----------"
+    printf '| %-10s | %-30s | %-11s |\n' "ACTION" "COLLECTION" "HTTP_STATUS"
+    printf '+-%-10s-+-%-30s-+-%-11s-+\n' "----------" "------------------------------" "-----------"
+}
+
+print_collection_table_row() {
+    local action="$1"
+    local collection="$2"
+    local status="$3"
+    printf '| %-10s | %-30s | %-11s |\n' "$action" "$collection" "$status"
+}
+
+print_collection_table_footer() {
+    printf '+-%-10s-+-%-30s-+-%-11s-+\n' "----------" "------------------------------" "-----------"
+}
+
 test_firestore_collection_crud() {
     local base="$1"
     local collection="$2"
@@ -220,7 +237,7 @@ test_firestore_collection_crud() {
     response="$(http_post_json "$create_url" "$create_payload")"
     status="$(echo "$response" | status_of)"
     body="$(echo "$response" | body_of)"
-    echo "[*] CREATE probe: $collection/$test_doc_id -> HTTP $status"
+    print_collection_table_row "CREATE" "$collection" "$status"
 
     if [[ "$status" == "200" ]]; then
         echo "[X] PUBLIC WRITE in '$collection': unauthenticated document creation allowed"
@@ -236,7 +253,7 @@ test_firestore_collection_crud() {
     response="$(http_get "$test_doc_path")"
     status="$(echo "$response" | status_of)"
     body="$(echo "$response" | body_of)"
-    echo "[*] READ probe: $collection/$test_doc_id -> HTTP $status"
+    print_collection_table_row "READ" "$collection" "$status"
 
     if [[ "$status" == "200" ]]; then
         echo "[X] PUBLIC READ in '$collection': test document is readable"
@@ -253,7 +270,7 @@ test_firestore_collection_crud() {
     response="$(http_patch_json "$test_doc_path?updateMask.fieldPaths=operation&updateMask.fieldPaths=updated" "$update_payload")"
     status="$(echo "$response" | status_of)"
     body="$(echo "$response" | body_of)"
-    echo "[*] UPDATE probe: $collection/$test_doc_id -> HTTP $status"
+    print_collection_table_row "UPDATE" "$collection" "$status"
 
     if [[ "$status" == "200" ]]; then
         echo "[X] PUBLIC WRITE in '$collection': unauthenticated document update allowed"
@@ -271,7 +288,7 @@ test_firestore_collection_crud() {
     response="$(http_delete "$test_doc_path")"
     status="$(echo "$response" | status_of)"
     body="$(echo "$response" | body_of)"
-    echo "[*] DELETE probe: $collection/$test_doc_id -> HTTP $status"
+    print_collection_table_row "DELETE" "$collection" "$status"
 
     if [[ "$status" == "200" ]]; then
         echo "[X] PUBLIC DELETE in '$collection': unauthenticated document deletion allowed"
@@ -320,11 +337,13 @@ check_firestore_api() {
         if [[ "${#collections[@]}" -eq 0 ]]; then
             echo "[!] Wordlist is empty after filtering comments/blank lines"
         else
+            echo "[*] Collection probes summary (table format):"
+            print_collection_table_header
             for c in "${collections[@]}"; do
                 response="$(http_get "$base/$c?pageSize=1")"
                 status="$(echo "$response" | status_of)"
                 body="$(echo "$response" | body_of)"
-                echo "[*] Collection probe: $c -> HTTP $status"
+                print_collection_table_row "LIST" "$c" "$status"
 
                 if [[ "$status" == "200" ]] && echo "$body" | jq -e '.documents | length > 0' >/dev/null 2>&1; then
                     echo "[X] EXPOSED COLLECTION: $c"
@@ -339,6 +358,7 @@ check_firestore_api() {
 
                 test_firestore_collection_crud "$base" "$c"
             done
+            print_collection_table_footer
 
             if [[ "${#found_collections[@]}" -gt 0 ]]; then
                 echo
