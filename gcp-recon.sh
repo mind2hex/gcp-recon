@@ -5,6 +5,7 @@ PROJECT_ID=""
 BUCKET=""
 WORDLIST=""
 TIMEOUT=10
+JOBS=5
 RUN_FIRESTORE=1
 RUN_STORAGE=1
 RUN_RTDB=1
@@ -90,6 +91,7 @@ usage() {
   echo
   echo "Options:"
   echo "  -b, --bucket <bucket>         Override bucket name"
+  echo "  -j, --jobs <n>                Parallel jobs for bruteforce checks (default: 5)"
   echo "  -w, --wordlist <file>         Firestore collections wordlist"
   echo "      --exclude-firestore       Skip Firestore checks"
   echo "      --exclude-storage         Skip Storage checks"
@@ -110,6 +112,15 @@ parse_args() {
       -w|--wordlist)
         [[ -z "$2" ]] && usage
         WORDLIST="$2"
+        shift 2
+        ;;
+      -j|--jobs)
+        [[ -z "$2" ]] && usage
+        if [[ ! "$2" =~ ^[0-9]+$ ]] || [[ "$2" -lt 1 ]]; then
+          echo "[!] Invalid jobs value: $2"
+          exit 1
+        fi
+        JOBS="$2"
         shift 2
         ;;
       -h|--help)
@@ -226,6 +237,18 @@ json_non_empty() {
   ' >/dev/null 2>&1
 }
 
+wait_for_job_slot() {
+    local max_jobs="$1"
+    local running
+    while true; do
+        running="$(jobs -rp | wc -l | tr -d ' ')"
+        if [[ "$running" -lt "$max_jobs" ]]; then
+            break
+        fi
+        sleep 0.05
+    done
+}
+
 print_collection_table_header() {
     printf '\n+-%-10s-+-%-30s-+-%-11s-+\n' "----------" "------------------------------" "-----------"
     printf '| %-10s | %-30s | %-11s |\n' "ACTION" "COLLECTION" "HTTP_STATUS"
@@ -309,7 +332,7 @@ check_firestore_api() {
 
     local base="https://firestore.googleapis.com/v1/projects/$PROJECT_ID/databases/(default)/documents"
     local collections=()
-    local found_collections=()
+    local tmp_dir=""
 
     echo "$base"
 
@@ -339,28 +362,36 @@ check_firestore_api() {
         if [[ "${#collections[@]}" -eq 0 ]]; then
             echo "[!] Wordlist is empty after filtering comments/blank lines"
         else
+            tmp_dir="$(mktemp -d 2>/dev/null || mktemp -d -t firestore_parallel)"
             print_collection_table_header
-            for c in "${collections[@]}"; do
-                response="$(http_get "$base/$c?pageSize=1")"
-                status="$(echo "$response" | status_of)"
-                body="$(echo "$response" | body_of)"
-                print_collection_table_row "LIST" "$c" "$status"
 
-                if [[ "$status" == "200" ]] && echo "$body" | jq -e '.documents | length > 0' >/dev/null 2>&1; then
-                    found_collections+=("$c")
-                elif [[ "$status" == "200" ]]; then
-                    :
-                fi
+            for ((i=0; i<${#collections[@]}; i++)); do
+                c="${collections[$i]}"
+                wait_for_job_slot "$JOBS"
+                (
+                    local_response="$(http_get "$base/$c?pageSize=1")"
+                    local_status="$(echo "$local_response" | status_of)"
 
-                test_firestore_collection_crud "$base" "$c"
+                    {
+                        print_collection_table_row "LIST" "$c" "$local_status"
+                        test_firestore_collection_crud "$base" "$c"
+                    } > "$tmp_dir/$i.rows"
+                ) &
             done
-            print_collection_table_footer
 
-            if [[ "${#found_collections[@]}" -gt 0 ]]; then
-                :
-            else
-                :
-            fi
+            wait
+
+            for ((i=0; i<${#collections[@]}; i++)); do
+                if [[ -f "$tmp_dir/$i.rows" ]]; then
+                    while IFS= read -r line || [[ -n "$line" ]]; do
+                        echo "$line"
+                    done < "$tmp_dir/$i.rows"
+                fi
+            done
+
+            print_collection_table_footer
+            rm -rf "$tmp_dir"
+
         fi
     else
         echo "[*] Skipping Firestore collection bruteforce (no --wordlist provided)"
