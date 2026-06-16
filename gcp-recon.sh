@@ -215,20 +215,20 @@ print_collection_table_footer() {
 }
 
 print_storage_table_header() {
-    printf '\n+-%-10s-+-%-30s-+-%-11s-+\n' "----------" "------------------------------" "-----------"
-    printf '| %-10s | %-30s | %-11s |\n' "ACTION" "BUCKET" "HTTP_STATUS"
-    printf '+-%-10s-+-%-30s-+-%-11s-+\n' "----------" "------------------------------" "-----------"
+    printf '\n+-%-10s-+-%-50s-+-%-11s-+\n' "----------" "--------------------------------------------------" "-----------"
+    printf '| %-10s | %-50s | %-11s |\n' "ACTION" "BUCKET" "HTTP_STATUS"
+    printf '+-%-10s-+-%-50s-+-%-11s-+\n' "----------" "--------------------------------------------------" "-----------"
 }
 
 print_storage_table_row() {
     local action="$1"
     local bucket="$2"
     local status="$3"
-    printf '| %-10s | %-30s | %-11s |\n' "$action" "$bucket" "$status"
+    printf '| %-10s | %-50s | %-11s |\n' "$action" "$bucket" "$status"
 }
 
 print_storage_table_footer() {
-    printf '+-%-10s-+-%-30s-+-%-11s-+\n' "----------" "------------------------------" "-----------"
+    printf '+-%-10s-+-%-50s-+-%-11s-+\n' "----------" "--------------------------------------------------" "-----------"
 }
 
 test_firestore_collection_crud() {
@@ -441,6 +441,9 @@ check_storage_api() {
     local response status
 
     encoded_object="$(jq -rn --arg v "$test_object" '$v|@uri')"
+    echo "[*] Storage Firebase base URL: $firebase_base"
+    echo "[*] Storage GCS JSON API URL: $gcs_base"
+    echo "[*] Storage GCS Upload API URL: $gcs_upload_base"
 
     response="$(http_get "$firebase_base?maxResults=5")"
     status="$(echo "$response" | status_of)"
