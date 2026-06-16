@@ -320,6 +320,7 @@ check_firestore_api() {
                 response="$(http_get "$base/$c?pageSize=1")"
                 status="$(echo "$response" | status_of)"
                 body="$(echo "$response" | body_of)"
+                echo "[*] Collection probe: $c -> HTTP $status"
 
                 if [[ "$status" == "200" ]] && echo "$body" | jq -e '.documents | length > 0' >/dev/null 2>&1; then
                     echo "[X] EXPOSED COLLECTION: $c"
