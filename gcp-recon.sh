@@ -5,6 +5,10 @@ PROJECT_ID=""
 BUCKET=""
 WORDLIST=""
 TIMEOUT=10
+RUN_FIRESTORE=1
+RUN_STORAGE=1
+RUN_RTDB=1
+RUN_CLOUD_RUN=1
 
 COLOR_RESET=""
 COLOR_RED=""
@@ -82,7 +86,16 @@ banner() {
 }
 
 usage() {
-  echo "Usage: $0 <project-id> [-b|--bucket <bucket>] [-w|--wordlist <file>]"
+  echo "Usage: $0 <project-id> [options]"
+  echo
+  echo "Options:"
+  echo "  -b, --bucket <bucket>         Override bucket name"
+  echo "  -w, --wordlist <file>         Firestore collections wordlist"
+  echo "      --exclude-firestore       Skip Firestore checks"
+  echo "      --exclude-storage         Skip Storage checks"
+  echo "      --exclude-rtdb            Skip Realtime DB checks"
+  echo "      --exclude-cloud-run       Skip Cloud Run checks"
+  echo "  -h, --help                    Show this help"
   exit 1
 }
 
@@ -101,6 +114,22 @@ parse_args() {
         ;;
       -h|--help)
         usage
+        ;;
+      --exclude-firestore)
+        RUN_FIRESTORE=0
+        shift
+        ;;
+      --exclude-storage)
+        RUN_STORAGE=0
+        shift
+        ;;
+      --exclude-rtdb)
+        RUN_RTDB=0
+        shift
+        ;;
+      --exclude-cloud-run)
+        RUN_CLOUD_RUN=0
+        shift
         ;;
       -*)
         echo "[!] Unknown option: $1"
@@ -435,6 +464,7 @@ check_storage_api() {
     local firebase_base="https://firebasestorage.googleapis.com/v0/b/$bucket/o"
     local gcs_base="https://storage.googleapis.com/storage/v1/b/$bucket/o"
     local gcs_upload_base="https://storage.googleapis.com/upload/storage/v1/b/$bucket/o"
+    local firebase_upload_base="https://firebasestorage.googleapis.com/v0/b/$bucket/o"
     local test_object="security_audit_tmp_$(date +%s)_$RANDOM.txt"
     local encoded_object
     local test_payload="storage_rest_audit_script"
@@ -442,6 +472,7 @@ check_storage_api() {
 
     encoded_object="$(jq -rn --arg v "$test_object" '$v|@uri')"
     echo "[*] Storage Firebase base URL: $firebase_base"
+    echo "[*] Storage Firebase upload URL: $firebase_upload_base"
     echo "[*] Storage GCS JSON API URL: $gcs_base"
     echo "[*] Storage GCS Upload API URL: $gcs_upload_base"
 
@@ -450,7 +481,7 @@ check_storage_api() {
     print_storage_table_header
     print_storage_table_row "LIST_FB" "$bucket" "$status"
 
-    response="$(http_post_data "$firebase_base?name=$encoded_object" "$test_payload" "text/plain")"
+    response="$(http_post_data "$firebase_upload_base?uploadType=media&name=$encoded_object" "$test_payload" "text/plain")"
     status="$(echo "$response" | status_of)"
     print_storage_table_row "WRITE_FB" "$bucket" "$status"
 
@@ -707,12 +738,31 @@ main() {
     exit 1
   }
 
-  check_firestore_api
-  check_storage_api
-  check_realtime_db_api
+  if [[ "$RUN_FIRESTORE" -eq 1 ]]; then
+    check_firestore_api
+  else
+    echo "[*] Skipping Firestore checks (--exclude-firestore)"
+  fi
+
+  if [[ "$RUN_STORAGE" -eq 1 ]]; then
+    check_storage_api
+  else
+    echo "[*] Skipping Storage checks (--exclude-storage)"
+  fi
+
+  if [[ "$RUN_RTDB" -eq 1 ]]; then
+    check_realtime_db_api
+  else
+    echo "[*] Skipping Realtime DB checks (--exclude-rtdb)"
+  fi
+
   #check_firebase_hosting
   #check_cloud_functions
-  check_cloud_run_guessing
+  if [[ "$RUN_CLOUD_RUN" -eq 1 ]]; then
+    check_cloud_run_guessing
+  else
+    echo "[*] Skipping Cloud Run checks (--exclude-cloud-run)"
+  fi
   #check_identity_toolkit
   #check_remote_config
   #check_api_gateway_and_docs
