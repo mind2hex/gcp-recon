@@ -6,6 +6,55 @@ BUCKET=""
 WORDLIST=""
 TIMEOUT=10
 
+COLOR_RESET=""
+COLOR_RED=""
+COLOR_GREEN=""
+COLOR_YELLOW=""
+COLOR_BLUE=""
+COLOR_CYAN=""
+COLOR_MAGENTA=""
+
+init_colors() {
+  if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    COLOR_RESET=$'\033[0m'
+    COLOR_RED=$'\033[31m'
+    COLOR_GREEN=$'\033[32m'
+    COLOR_YELLOW=$'\033[33m'
+    COLOR_BLUE=$'\033[34m'
+    COLOR_CYAN=$'\033[36m'
+    COLOR_MAGENTA=$'\033[35m'
+  fi
+}
+
+colorize_output() {
+  local line=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      "[X]"*)
+        printf '%b%s%b\n' "$COLOR_RED" "$line" "$COLOR_RESET"
+        ;;
+      "[OK]"*)
+        printf '%b%s%b\n' "$COLOR_GREEN" "$line" "$COLOR_RESET"
+        ;;
+      "[!]"*)
+        printf '%b%s%b\n' "$COLOR_YELLOW" "$line" "$COLOR_RESET"
+        ;;
+      "[*]"*|"[+]"*)
+        printf '%b%s%b\n' "$COLOR_CYAN" "$line" "$COLOR_RESET"
+        ;;
+      "[?]"*)
+        printf '%b%s%b\n' "$COLOR_MAGENTA" "$line" "$COLOR_RESET"
+        ;;
+      "===========================================")
+        printf '%b%s%b\n' "$COLOR_BLUE" "$line" "$COLOR_RESET"
+        ;;
+      *)
+        printf '%s\n' "$line"
+        ;;
+    esac
+  done
+}
+
 REGIONS=(
   us-central1 us-east1 us-east4 us-west1
   northamerica-northeast1
@@ -688,6 +737,12 @@ check_api_gateway_and_docs() {
 }
 
 main() {
+  init_colors
+
+  if [[ -n "$COLOR_RESET" ]]; then
+    exec > >(colorize_output)
+  fi
+
   parse_args "$@"
 
   command -v jq >/dev/null 2>&1 || {
