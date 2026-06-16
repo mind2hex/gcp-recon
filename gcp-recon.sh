@@ -230,76 +230,21 @@ test_firestore_collection_crud() {
       }
     }'
 
-    echo
-    echo "[*] CRUD checks on discovered collection: $collection"
-    echo "[*] Testing CREATE on $collection/$test_doc_id..."
-
     response="$(http_post_json "$create_url" "$create_payload")"
     status="$(echo "$response" | status_of)"
-    body="$(echo "$response" | body_of)"
     print_collection_table_row "CREATE" "$collection" "$status"
-
-    if [[ "$status" == "200" ]]; then
-        echo "[X] PUBLIC WRITE in '$collection': unauthenticated document creation allowed"
-    elif [[ "$status" == "403" ]]; then
-        echo "[OK] CREATE blocked in '$collection'"
-    else
-        echo "[?] CREATE in '$collection' returned HTTP $status"
-        echo "$body" | jq . 2>/dev/null || echo "$body"
-    fi
-
-    echo "[*] Testing READ of created document in '$collection'..."
 
     response="$(http_get "$test_doc_path")"
     status="$(echo "$response" | status_of)"
-    body="$(echo "$response" | body_of)"
     print_collection_table_row "READ" "$collection" "$status"
-
-    if [[ "$status" == "200" ]]; then
-        echo "[X] PUBLIC READ in '$collection': test document is readable"
-    elif [[ "$status" == "403" ]]; then
-        echo "[OK] READ blocked in '$collection'"
-    elif [[ "$status" == "404" ]]; then
-        echo "[OK] READ in '$collection' failed because test doc does not exist"
-    else
-        echo "[?] READ in '$collection' returned HTTP $status"
-    fi
-
-    echo "[*] Testing UPDATE/PATCH in '$collection'..."
 
     response="$(http_patch_json "$test_doc_path?updateMask.fieldPaths=operation&updateMask.fieldPaths=updated" "$update_payload")"
     status="$(echo "$response" | status_of)"
-    body="$(echo "$response" | body_of)"
     print_collection_table_row "UPDATE" "$collection" "$status"
-
-    if [[ "$status" == "200" ]]; then
-        echo "[X] PUBLIC WRITE in '$collection': unauthenticated document update allowed"
-    elif [[ "$status" == "403" ]]; then
-        echo "[OK] UPDATE blocked in '$collection'"
-    elif [[ "$status" == "404" ]]; then
-        echo "[OK] UPDATE in '$collection' failed because test doc does not exist"
-    else
-        echo "[?] UPDATE in '$collection' returned HTTP $status"
-        echo "$body" | jq . 2>/dev/null || echo "$body"
-    fi
-
-    echo "[*] Testing DELETE in '$collection'..."
 
     response="$(http_delete "$test_doc_path")"
     status="$(echo "$response" | status_of)"
-    body="$(echo "$response" | body_of)"
     print_collection_table_row "DELETE" "$collection" "$status"
-
-    if [[ "$status" == "200" ]]; then
-        echo "[X] PUBLIC DELETE in '$collection': unauthenticated document deletion allowed"
-    elif [[ "$status" == "403" ]]; then
-        echo "[OK] DELETE blocked in '$collection'"
-    elif [[ "$status" == "404" ]]; then
-        echo "[OK] DELETE in '$collection' failed because test doc does not exist"
-    else
-        echo "[?] DELETE in '$collection' returned HTTP $status"
-        echo "$body" | jq . 2>/dev/null || echo "$body"
-    fi
 }
 
 check_firestore_api() {
@@ -337,7 +282,6 @@ check_firestore_api() {
         if [[ "${#collections[@]}" -eq 0 ]]; then
             echo "[!] Wordlist is empty after filtering comments/blank lines"
         else
-            echo "[*] Collection probes summary (table format):"
             print_collection_table_header
             for c in "${collections[@]}"; do
                 response="$(http_get "$base/$c?pageSize=1")"
@@ -346,14 +290,9 @@ check_firestore_api() {
                 print_collection_table_row "LIST" "$c" "$status"
 
                 if [[ "$status" == "200" ]] && echo "$body" | jq -e '.documents | length > 0' >/dev/null 2>&1; then
-                    echo "[X] EXPOSED COLLECTION: $c"
                     found_collections+=("$c")
                 elif [[ "$status" == "200" ]]; then
-                    if echo "$body" | jq -e 'type == "object" and length == 0' >/dev/null 2>&1; then
-                        echo "[!] HTTP 200 with empty JSON for '$c' (possible non-existent collection on exposed Firestore)"
-                    else
-                        echo "[!] HTTP 200 but no documents for '$c' (not counted as existing collection)"
-                    fi
+                    :
                 fi
 
                 test_firestore_collection_crud "$base" "$c"
@@ -361,11 +300,9 @@ check_firestore_api() {
             print_collection_table_footer
 
             if [[ "${#found_collections[@]}" -gt 0 ]]; then
-                echo
-                echo "[X] Readable existing collections discovered:"
-                printf ' - %s\n' "${found_collections[@]}"
+                :
             else
-                echo "[OK] No readable existing collections discovered during recon"
+                :
             fi
         fi
     else
