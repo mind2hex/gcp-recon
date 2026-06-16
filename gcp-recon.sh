@@ -149,6 +149,17 @@ http_post_json() {
     "$1"
 }
 
+http_post_data() {
+  curl -sS \
+    --connect-timeout "$TIMEOUT" \
+    --max-time "$TIMEOUT" \
+    -X POST \
+    -H "Content-Type: $3" \
+    --data-binary "$2" \
+    -w $'\n__HTTP_STATUS__:%{http_code}\n' \
+    "$1"
+}
+
 http_patch_json() {
   curl -sS \
     --connect-timeout "$TIMEOUT" \
@@ -200,6 +211,23 @@ print_collection_table_row() {
 }
 
 print_collection_table_footer() {
+    printf '+-%-10s-+-%-30s-+-%-11s-+\n' "----------" "------------------------------" "-----------"
+}
+
+print_storage_table_header() {
+    printf '\n+-%-10s-+-%-30s-+-%-11s-+\n' "----------" "------------------------------" "-----------"
+    printf '| %-10s | %-30s | %-11s |\n' "ACTION" "BUCKET" "HTTP_STATUS"
+    printf '+-%-10s-+-%-30s-+-%-11s-+\n' "----------" "------------------------------" "-----------"
+}
+
+print_storage_table_row() {
+    local action="$1"
+    local bucket="$2"
+    local status="$3"
+    printf '| %-10s | %-30s | %-11s |\n' "$action" "$bucket" "$status"
+}
+
+print_storage_table_footer() {
     printf '+-%-10s-+-%-30s-+-%-11s-+\n' "----------" "------------------------------" "-----------"
 }
 
@@ -406,86 +434,47 @@ check_storage_api() {
     local bucket="$BUCKET"
     local firebase_base="https://firebasestorage.googleapis.com/v0/b/$bucket/o"
     local gcs_base="https://storage.googleapis.com/storage/v1/b/$bucket/o"
+    local gcs_upload_base="https://storage.googleapis.com/upload/storage/v1/b/$bucket/o"
+    local test_object="security_audit_tmp_$(date +%s)_$RANDOM.txt"
+    local encoded_object
+    local test_payload="storage_rest_audit_script"
+    local response status
 
-    local prefixes=(
-        contratos notificaciones pruebas Colombia BaseClientes chat_media
-        whatsapp uploads documentos clientes users
-    )
+    encoded_object="$(jq -rn --arg v "$test_object" '$v|@uri')"
 
-    echo $firebase_base
-    echo $gcs_base
-
-    echo "[*] Bucket: $bucket"
-
-    echo
-    echo "[*] Testing Firebase Storage listing..."
-
-    local response status body
     response="$(http_get "$firebase_base?maxResults=5")"
     status="$(echo "$response" | status_of)"
-    body="$(echo "$response" | body_of)"
+    print_storage_table_header
+    print_storage_table_row "LIST_FB" "$bucket" "$status"
 
-    if [[ "$status" == "200" ]] && echo "$body" | jq -e '(.items // []) | length > 0' >/dev/null 2>&1; then
-        echo "[X] POSSIBLE EXPOSURE: Firebase Storage listing is public"
-        echo "$body" | jq -r '.items[].name' | head
-    elif [[ "$status" == "200" ]] && echo "$body" | jq -e '(.prefixes // []) | length > 0' >/dev/null 2>&1; then
-        echo "[X] POSSIBLE EXPOSURE: Firebase Storage prefixes are public"
-        echo "$body" | jq -r '.prefixes[]' | head
-    elif [[ "$status" == "403" || "$status" == "401" ]]; then
-        echo "[OK] Firebase Storage listing blocked"
-    else
-        echo "[?] Firebase Storage returned HTTP $status"
-        echo "$body" | jq . 2>/dev/null || echo "$body"
-    fi
+    response="$(http_post_data "$firebase_base?name=$encoded_object" "$test_payload" "text/plain")"
+    status="$(echo "$response" | status_of)"
+    print_storage_table_row "WRITE_FB" "$bucket" "$status"
 
-    echo
-    echo "[*] Testing GCS JSON API listing..."
+    response="$(http_get "$firebase_base/$encoded_object?alt=media")"
+    status="$(echo "$response" | status_of)"
+    print_storage_table_row "GET_FB" "$bucket" "$status"
+
+    response="$(http_delete "$firebase_base/$encoded_object")"
+    status="$(echo "$response" | status_of)"
+    print_storage_table_row "DEL_FB" "$bucket" "$status"
 
     response="$(http_get "$gcs_base?maxResults=5")"
     status="$(echo "$response" | status_of)"
-    body="$(echo "$response" | body_of)"
+    print_storage_table_row "LIST_GCS" "$bucket" "$status"
 
-    if [[ "$status" == "200" ]] && echo "$body" | jq -e '(.items // []) | length > 0' >/dev/null 2>&1; then
-        echo "[X] POSSIBLE EXPOSURE: GCS JSON API listing is public"
-        echo "$body" | jq -r '.items[].name' | head
-    elif [[ "$status" == "403" || "$status" == "401" ]]; then
-        echo "[OK] GCS JSON API listing blocked"
-    else
-        echo "[?] GCS JSON API returned HTTP $status"
-    fi
+    response="$(http_post_data "$gcs_upload_base?uploadType=media&name=$encoded_object" "$test_payload" "text/plain")"
+    status="$(echo "$response" | status_of)"
+    print_storage_table_row "WRITE_GCS" "$bucket" "$status"
 
-    echo
-    echo "[*] Bruteforcing common Firebase Storage prefixes..."
+    response="$(http_get "$gcs_base/$encoded_object?alt=media")"
+    status="$(echo "$response" | status_of)"
+    print_storage_table_row "GET_GCS" "$bucket" "$status"
 
-    local exposed=()
-
-    for prefix in "${prefixes[@]}"; do
-        local encoded_prefix
-        encoded_prefix="$(jq -rn --arg v "$prefix/" '$v|@uri')"
-
-        response="$(http_get "$firebase_base?prefix=$encoded_prefix&maxResults=3")"
-        status="$(echo "$response" | status_of)"
-        body="$(echo "$response" | body_of)"
-
-        if [[ "$status" == "200" ]] && echo "$body" | jq -e '((.items // []) | length > 0) or ((.prefixes // []) | length > 0)' >/dev/null 2>&1; then
-        echo "[X] EXPOSED PREFIX: $prefix/"
-
-        echo "$body" | jq -r '
-            (.prefixes // [])[],
-            (.items // [])[].name
-        ' | head
-
-        exposed+=("$prefix/")
-        fi
-    done
-
-    if [[ "${#exposed[@]}" -gt 0 ]]; then
-        echo
-        echo "[X] Exposed Firebase Storage prefixes:"
-        printf ' - %s\n' "${exposed[@]}"
-    else
-        echo "[OK] No exposed Firebase Storage prefixes found from wordlist"
-    fi
+    response="$(http_delete "$gcs_base/$encoded_object")"
+    status="$(echo "$response" | status_of)"
+    print_storage_table_row "DEL_GCS" "$bucket" "$status"
+    print_storage_table_footer
 }
 
 check_realtime_db_api() {
