@@ -10,6 +10,8 @@ RUN_FIRESTORE=1
 RUN_STORAGE=1
 RUN_RTDB=1
 RUN_CLOUD_RUN=1
+RUN_IDENTITY_TOOLKIT=1
+RUN_REMOTE_CONFIG=1
 
 COLOR_RESET=""
 COLOR_RED=""
@@ -90,14 +92,18 @@ usage() {
   echo "Usage: $0 <project-id> [options]"
   echo
   echo "Options:"
-  echo "  -b, --bucket <bucket>         Override bucket name"
-  echo "  -j, --jobs <n>                Parallel jobs for bruteforce checks (default: 5)"
-  echo "  -w, --wordlist <file>         Firestore collections wordlist"
-  echo "      --exclude-firestore       Skip Firestore checks"
-  echo "      --exclude-storage         Skip Storage checks"
-  echo "      --exclude-rtdb            Skip Realtime DB checks"
-  echo "      --exclude-cloud-run       Skip Cloud Run checks"
-  echo "  -h, --help                    Show this help"
+  echo "  -b, --bucket <bucket>           Override bucket name"
+  echo "  -j, --jobs <n>                  Parallel jobs for bruteforce checks (default: 5)"
+  echo "  -w, --wordlist <file>           Firestore collections wordlist"
+  echo "  -k, --apikey <key>              Api key from firebase"
+  echo "  -a, --appid <appid>             App id"
+  echo "      --exclude-firestore         Skip Firestore checks"
+  echo "      --exclude-storage           Skip Storage checks"
+  echo "      --exclude-rtdb              Skip Realtime DB checks"
+  echo "      --exclude-cloud-run         Skip Cloud Run checks"
+  echo "      --exclude-remote-config     Skip Remote Config checks"
+  echo "      --exclude-identity-toolkit  Skip Identity Toolkit Checks"
+  echo "  -h, --help                      Show this help"
   exit 1
 }
 
@@ -123,6 +129,14 @@ parse_args() {
         JOBS="$2"
         shift 2
         ;;
+      -k|--apikey)
+        FIREBASE_API_KEY=$2
+        shift 2
+        ;;
+      -a|--appid)
+        FIREBASE_APP_ID=$2
+        shift 2
+        ;;
       -h|--help)
         usage
         ;;
@@ -140,6 +154,14 @@ parse_args() {
         ;;
       --exclude-cloud-run)
         RUN_CLOUD_RUN=0
+        shift
+        ;;
+      --exclude-identity-toolkit)
+        RUN_IDENTITY_TOOLKIT=0
+        shift
+        ;;
+      --exclude-remote-config)
+        RUN_REMOTE_CONFIG=0
         shift
         ;;
       -*)
@@ -666,11 +688,79 @@ check_identity_toolkit() {
     return
   fi
 
-  echo "[*] Testing anonymous signup availability..."
-
-  local url="https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=$FIREBASE_API_KEY"
-  local payload='{"returnSecureToken":true}'
   local response status body
+  local url="https://identitytoolkit.googleapis.com/admin/v2/projects/$PROJECT_ID/config?key=$FIREBASE_API_KEY"
+
+  echo "[*] Testing admin project configuration access..."
+  echo "[*] URL: $url"
+  response="$(http_get "$url")"
+  status="$(echo "$response" | status_of)"
+  body="$(echo "$response" | body_of)"
+
+  if [[ "$status" == "200" ]] && echo "$body" | json_non_empty; then
+    echo "[X] ADMIN CONFIG ACCESSIBLE with API key only"
+    echo "$body" | jq '
+      paths(scalars) as $path
+      | select(($path | map(tostring) | join(".")) | test("key|secret|domain|provider"; "i"))
+      | {path: ($path | map(tostring) | join(".")), value: getpath($path)}
+    ' 2>/dev/null || echo "$body"
+  elif [[ "$status" =~ ^(401|403)$ ]]; then
+    echo "[OK] Admin project configuration blocked"
+  else
+    echo "[?] Admin project configuration HTTP $status"
+    echo "$body" | jq . 2>/dev/null || echo "$body"
+  fi
+
+  url="https://identitytoolkit.googleapis.com/v2/recaptchaConfig?key=$FIREBASE_API_KEY&clientType=CLIENT_TYPE_WEB&version=RECAPTCHA_ENTERPRISE"
+  echo "[*] Testing public reCAPTCHA configuration..."
+  echo "[*] URL: $url"
+  response="$(http_get "$url")"
+  status="$(echo "$response" | status_of)"
+  body="$(echo "$response" | body_of)"
+
+  if [[ "$status" == "200" ]]; then
+    echo "[+] reCAPTCHA configuration is readable (normally public client configuration)"
+    echo "$body" | jq '{recaptchaKey, enforcementState}' 2>/dev/null || echo "$body"
+  elif [[ "$status" =~ ^(401|403)$ ]]; then
+    echo "[OK] reCAPTCHA configuration blocked"
+  else
+    echo "[?] reCAPTCHA configuration HTTP $status"
+    echo "$body" | jq . 2>/dev/null || echo "$body"
+  fi
+
+  local protected_urls=(
+    "Account list|https://identitytoolkit.googleapis.com/v1/projects/$PROJECT_ID/accounts:batchGet?maxResults=1&key=$FIREBASE_API_KEY"
+    "OIDC IdP configs|https://identitytoolkit.googleapis.com/v2/projects/$PROJECT_ID/oauthIdpConfigs?key=$FIREBASE_API_KEY"
+    "SAML IdP configs|https://identitytoolkit.googleapis.com/v2/projects/$PROJECT_ID/inboundSamlConfigs?key=$FIREBASE_API_KEY"
+    "Default IdP configs|https://identitytoolkit.googleapis.com/v2/projects/$PROJECT_ID/defaultSupportedIdpConfigs?key=$FIREBASE_API_KEY"
+  )
+  local test_name entry
+
+  for entry in "${protected_urls[@]}"; do
+    test_name="${entry%%|*}"
+    url="${entry#*|}"
+    echo "[*] Testing $test_name with API key only..."
+    echo "[*] URL: $url"
+    response="$(http_get "$url")"
+    status="$(echo "$response" | status_of)"
+    body="$(echo "$response" | body_of)"
+
+    if [[ "$status" == "200" ]]; then
+      echo "[X] $test_name ACCESSIBLE with API key only"
+      echo "$body" | jq . 2>/dev/null || echo "$body"
+    elif [[ "$status" =~ ^(401|403)$ ]]; then
+      echo "[OK] $test_name blocked"
+    else
+      echo "[?] $test_name HTTP $status"
+      echo "$body" | jq . 2>/dev/null || echo "$body"
+    fi
+  done
+
+  url="https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=$FIREBASE_API_KEY"
+  local payload='{"returnSecureToken":true}'
+
+  echo "[*] Testing anonymous signup availability..."
+  echo "[*] URL: $url"
 
   response="$(http_post_json "$url" "$payload")"
   status="$(echo "$response" | status_of)"
@@ -678,6 +768,18 @@ check_identity_toolkit() {
 
   if [[ "$status" == "200" ]] && echo "$body" | jq -e '.idToken' >/dev/null 2>&1; then
     echo "[X] Anonymous signup appears ENABLED"
+    local id_token delete_url
+    id_token="$(echo "$body" | jq -r '.idToken')"
+    delete_url="https://identitytoolkit.googleapis.com/v1/accounts:delete?key=$FIREBASE_API_KEY"
+    echo "[*] Cleaning up anonymous audit account..."
+    echo "[*] URL: $delete_url"
+    response="$(http_post_json "$delete_url" "$(jq -n --arg idToken "$id_token" '{idToken:$idToken}')")"
+    status="$(echo "$response" | status_of)"
+    if [[ "$status" == "200" ]]; then
+      echo "[OK] Anonymous audit account deleted"
+    else
+      echo "[!] Anonymous audit account cleanup HTTP $status"
+    fi
   elif echo "$body" | grep -q "ADMIN_ONLY_OPERATION"; then
     echo "[OK] Anonymous signup blocked/admin-only"
   else
@@ -769,6 +871,19 @@ main() {
     exit 1
   }
 
+
+  if [[ "$RUN_IDENTITY_TOOLKIT" -eq 1 ]];then
+    check_identity_toolkit
+  else
+    echo "[*] Skipping Identity Toolkit (--exclude-identity-toolkit)"
+  fi
+
+  if [[ "$RUN_REMOTE_CONFIG" -eq 1 ]];then
+    check_remote_config
+  else
+    echo "[*] Skipping remote config check (--exclude-remote-config)"
+  fi
+
   if [[ "$RUN_FIRESTORE" -eq 1 ]]; then
     check_firestore_api
   else
@@ -787,17 +902,17 @@ main() {
     echo "[*] Skipping Realtime DB checks (--exclude-rtdb)"
   fi
 
-  #check_firebase_hosting
-  #check_cloud_functions
   if [[ "$RUN_CLOUD_RUN" -eq 1 ]]; then
     check_cloud_run_guessing
   else
     echo "[*] Skipping Cloud Run checks (--exclude-cloud-run)"
   fi
-  #check_identity_toolkit
-  #check_remote_config
+
+  #check_firebase_hosting
+  #check_cloud_functions
   #check_api_gateway_and_docs
 }
 
-main "$@"
-
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
