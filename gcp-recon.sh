@@ -12,6 +12,7 @@ RUN_RTDB=1
 RUN_CLOUD_RUN=1
 RUN_IDENTITY_TOOLKIT=1
 RUN_REMOTE_CONFIG=1
+RUN_HOSTING=1
 
 COLOR_RESET=""
 COLOR_RED=""
@@ -101,6 +102,7 @@ usage() {
   echo "      --exclude-storage           Skip Storage checks"
   echo "      --exclude-rtdb              Skip Realtime DB checks"
   echo "      --exclude-cloud-run         Skip Cloud Run checks"
+  echo "      --exclude-hosting           Skip Firebase Hosting checks"
   echo "      --exclude-remote-config     Skip Remote Config checks"
   echo "      --exclude-identity-toolkit  Skip Identity Toolkit Checks"
   echo "  -h, --help                      Show this help"
@@ -154,6 +156,10 @@ parse_args() {
         ;;
       --exclude-cloud-run)
         RUN_CLOUD_RUN=0
+        shift
+        ;;
+      --exclude-hosting)
+        RUN_HOSTING=0
         shift
         ;;
       --exclude-identity-toolkit)
@@ -597,6 +603,34 @@ check_realtime_db_api() {
     done
 }
 
+check_hosting() {
+  banner "Testing Firebase Hosting init.js"
+
+  local url="https://$PROJECT_ID.web.app/__/firebase/init.js"
+  local response status body
+
+  echo "[*] URL: $url"
+
+  response="$(http_get "$url")"
+  status="$(echo "$response" | status_of)"
+  body="$(echo "$response" | body_of)"
+
+  if [[ "$status" == "200" ]]; then
+    echo "[+] Firebase Hosting init.js is public: $url"
+
+    if echo "$body" | grep -Eqi 'apiKey|projectId|storageBucket|databaseURL|authDomain|messagingSenderId|appId'; then
+      echo "[X] Firebase client configuration found at: $url"
+      echo "$body"
+    fi
+  elif [[ "$status" == "404" ]]; then
+    echo "[OK] Firebase Hosting init.js not found"
+  elif [[ "$status" =~ ^(401|403)$ ]]; then
+    echo "[OK] Firebase Hosting init.js blocked"
+  else
+    echo "[?] Firebase Hosting init.js HTTP $status"
+  fi
+}
+
 check_firebase_hosting() {
   banner "Testing Firebase Hosting"
 
@@ -871,6 +905,11 @@ main() {
     exit 1
   }
 
+  if [[ "$RUN_HOSTING" -eq 1 ]];then
+    check_hosting
+  else
+    echo "[*] Skipping hosting check (--exclude-hosting)"
+  fi
 
   if [[ "$RUN_IDENTITY_TOOLKIT" -eq 1 ]];then
     check_identity_toolkit
