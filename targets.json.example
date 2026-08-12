@@ -1,0 +1,14 @@
+[
+  {
+    "project_id": "proyecto-uno",
+    "apikey": "AIzaSy...uno",
+    "appid": "1:111:web:aaa",
+    "wordlist": "/ruta/gcp-recon/wordlist.txt"
+  },
+  {
+    "project_id": "proyecto-dos",
+    "apikey": "AIzaSy...dos",
+    "appid": "1:222:web:bbb",
+    "bucket": "proyecto-dos.appspot.com"
+  }
+]

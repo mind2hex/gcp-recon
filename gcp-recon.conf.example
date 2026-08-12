@@ -1,0 +1,17 @@
+# Copy to ~/.config/gcp-recon.conf and `chmod 600` it.
+# Loaded automatically; override the path with --config FILE.
+
+[smtp]
+host = smtp.gmail.com
+port = 587
+starttls = 1
+user = tu@correo.com
+pass = app_password_de_16_chars
+from = tu@correo.com
+
+# Optional: keeps secrets/args out of the cron line too.
+[defaults]
+apikey = AIza...
+appid = 1:123:web:abc
+wordlist = /ruta/gcp-recon/wordlist.txt
+# bucket = mi-bucket.appspot.com
